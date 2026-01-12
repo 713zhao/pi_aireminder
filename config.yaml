@@ -1,10 +1,20 @@
 # AI Reminder System Configuration
 
+# Event Source Configuration
+event_source: "google_calendar"  # "backend" or "google_calendar"
+
 # Backend API Configuration
 backend:
   url: "http://your-backend-server.com/api"
   events_endpoint: "/events/today"
   timeout: 10
+
+# Google Calendar Configuration
+google_calendar:
+  enabled: true
+  credentials_file: "credentials.json"
+  token_file: "token.json"
+  calendar_id: "primary"  # or specific calendar ID like "your-email@gmail.com"
 
 # Display Configuration
 display:
@@ -19,15 +29,21 @@ alarm:
   sound_file: "assets/alarm.wav"  # Not used - only voice reminders
   volume: 0.8
   repeat_interval: 30  # Not used - keeping for compatibility
-  voice_reminder_interval: 300  # seconds between voice reminders (5 minutes, configurable)
+  voice_reminder_interval: 10  # seconds between voice reminders (10 seconds, configurable)
   auto_stop_after: 1800  # seconds (30 minutes) - auto stop if not acknowledged
 
 # Text-to-Speech Configuration
 tts:
   engine: "pyttsx3"  # or "gtts" for Google TTS
-  rate: 150
-  volume: 0.9
+  rate: 140  # Speech rate (100-200, default 150)
+  volume: 0.9  # Volume (0.0-1.0)
   voice: null  # null = default, or specify voice ID
+  voice_name: "Microsoft Zira Desktop"  # Voice name: "Microsoft David Desktop", "Microsoft Zira Desktop", or null for default
+  chinese_voice_name: "Microsoft Huihui Desktop"  # Voice for Chinese text
+  # Available voices (run list_voices.py to see all):
+  #   - Microsoft David Desktop - English (United States) - Male
+  #   - Microsoft Zira Desktop - English (United States) - Female
+  #   - Microsoft Huihui Desktop - Chinese (Simplified)
 
 # Speech Recognition Configuration
 speech:
@@ -70,3 +86,19 @@ logging:
   file: "logs/pibot.log"
   max_bytes: 10485760  # 10MB
   backup_count: 3
+
+# News Feeds Configuration
+news:
+  max_items_per_feed: 5  # Maximum number of items to fetch from each feed
+  feeds:
+    #"BBC News": "http://feeds.bbci.co.uk/news/rss.xml"
+     "CNN": "http://rss.cnn.com/rss/edition.rss"
+    #"Reuters": "https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best"
+    #"TechCrunch": "https://techcrunch.com/feed/"
+    #"The Guardian": "https://www.theguardian.com/world/rss"
+    # Chinese News Sources (uncomment to enable)
+    # "China Daily": "http://www.chinadaily.com.cn/rss/world_rss.xml"
+    # "Xinhua English": "http://www.news.cn/english/rss/englishrssnew.xml"
+    # "CGTN": "https://www.cgtn.com/rss/news.xml"
+    # "South China Morning Post": "https://www.scmp.com/rss/91/feed"
+     "中新网即时新闻": "https://www.chinanews.com.cn/rss/scroll-news.xml"

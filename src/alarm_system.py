@@ -15,11 +15,14 @@ from event_fetcher import Event
 class AlarmSystem:
     """Manages alarm sounds and text-to-speech notifications"""
     
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, display_manager=None):
         self.config = config
         self.alarm_config = config['alarm']
         self.tts_config = config['tts']
         self.logger = logging.getLogger(__name__)
+        
+        # Reference to display manager for showing speech text
+        self.display_manager = display_manager
         
         # Initialize pygame for sound
         pygame.mixer.init()
@@ -28,6 +31,9 @@ class AlarmSystem:
         
         # Initialize TTS engine
         self.tts_engine = self._init_tts()
+        
+        # TTS lock to prevent concurrent access
+        self.tts_lock = threading.Lock()
         
         # State
         self.is_playing = False
@@ -66,8 +72,8 @@ class AlarmSystem:
             if voice_id:
                 engine.setProperty('voice', voice_id)
             
-            # Start the engine's event loop in the background
-            engine.startLoop(False)
+            # Don't start the loop - we'll use runAndWait() instead
+            # engine.startLoop(False)  # Removed to avoid "run loop already started" error
             
             self.logger.info("TTS engine initialized")
             return engine
@@ -110,9 +116,14 @@ class AlarmSystem:
             print(f"Time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
             print(f"{'='*60}\n")
             
+            print(f"🗣️  About to speak title...")
             self._speak(f"Reminder: {event.title}")
+            print(f"✅ Title spoken")
+            
             if event.description:
+                print(f"🗣️  About to speak description...")
                 self._speak(event.description)
+                print(f"✅ Description spoken")
             
             print(f"✅ Initial announcement complete\n")
             
@@ -200,15 +211,65 @@ class AlarmSystem:
             print("⚠️  TTS engine not available")
             return
         
-        try:
-            print(f"🔊 Speaking: {text}")
-            self.logger.info(f"Speaking: {text}")
-            self.tts_engine.say(text)
-            self.tts_engine.iterate()  # Process one iteration
-            print(f"✅ Finished speaking")
-        except Exception as e:
-            self.logger.error(f"TTS error: {e}")
-            print(f"❌ TTS error: {e}")
+        # Use lock to ensure only one TTS operation at a time
+        with self.tts_lock:
+            try:
+                print(f"🔊 Speaking: {text}")
+                self.logger.info(f"Speaking: {text}")
+                
+                # Show text on GUI if display manager is available
+                if self.display_manager:
+                    self.display_manager.show_speaking_text(text)
+                
+                # Use Windows SAPI directly - more reliable in threads
+                import win32com.client
+                speaker = win32com.client.Dispatch("SAPI.SpVoice")
+                
+                # Detect if text contains Chinese characters
+                def contains_chinese(text):
+                    return any('\u4e00' <= char <= '\u9fff' for char in text)
+                
+                # Select voice based on language
+                is_chinese = contains_chinese(text)
+                if is_chinese:
+                    voice_name = self.tts_config.get('chinese_voice_name', 'Microsoft Huihui Desktop')
+                else:
+                    voice_name = self.tts_config.get('voice_name')
+                
+                # Try to find and set the voice by name
+                if voice_name:
+                    voices = speaker.GetVoices()
+                    for i in range(voices.Count):
+                        voice = voices.Item(i)
+                        if voice_name in voice.GetDescription():
+                            speaker.Voice = voice
+                            self.logger.info(f"Using voice: {voice.GetDescription()}")
+                            break
+                
+                # Configure voice settings
+                rate = self.tts_config.get('rate', 150)
+                volume = self.tts_config.get('volume', 0.9)
+                
+                # SAPI rate is -10 to 10, pyttsx3 is ~100-200
+                # Convert: pyttsx3 150 = SAPI 0
+                sapi_rate = int((rate - 150) / 15)  # -10 to 10 range
+                sapi_rate = max(-10, min(10, sapi_rate))
+                
+                speaker.Rate = sapi_rate
+                speaker.Volume = int(volume * 100)  # 0-100
+                
+                # Speak (this is synchronous but doesn't hang like pyttsx3)
+                speaker.Speak(text)
+                
+                # Hide speaking text after speech completes
+                if self.display_manager:
+                    self.display_manager.hide_speaking_text()
+                
+                print(f"✅ Finished speaking")
+                    
+            except Exception as e:
+                self.logger.error(f"TTS error: {e}")
+                print(f"❌ TTS error: {e}")
     
     def speak_async(self, text: str):
         """Speak text asynchronously without blocking"""
