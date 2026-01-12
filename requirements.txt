@@ -1,0 +1,36 @@
+# Core dependencies
+requests>=2.31.0
+PyYAML>=6.0
+python-dotenv>=1.0.0
+
+# GUI
+tk>=0.1.0
+
+# Audio
+pyaudio>=0.2.13
+pydub>=0.25.1
+pygame>=2.5.0
+
+# Text-to-Speech
+pyttsx3>=2.90
+gTTS>=2.4.0
+
+# Speech Recognition
+vosk>=0.3.45
+SpeechRecognition>=3.10.0
+
+# Optional: Whisper (uncomment if using)
+# openai-whisper>=20230314
+
+# AI/LLM
+openai>=1.10.0
+google-generativeai>=0.3.0
+
+# Utilities
+python-dateutil>=2.8.2
+schedule>=1.2.0
+
+# Google Calendar Integration (optional)
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.1.0
+google-api-python-client>=2.70.0

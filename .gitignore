@@ -1,0 +1,38 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+logs/
+*.log
+
+# Config with sensitive data
+config.local.yaml
+
+# Models
+models/*.zip
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Audio files
+assets/*.wav
+!assets/alarm.wav
+
+# Temporary files
+*.tmp
+*.temp
+test.wav

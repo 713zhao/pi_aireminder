@@ -1,0 +1,72 @@
+# AI Reminder System Configuration
+
+# Backend API Configuration
+backend:
+  url: "http://your-backend-server.com/api"
+  events_endpoint: "/events/today"
+  timeout: 10
+
+# Display Configuration
+display:
+  window_title: "AI Reminder System"
+  width: 800
+  height: 480
+  fullscreen: false
+  refresh_interval: 60  # seconds
+
+# Alarm Configuration
+alarm:
+  sound_file: "assets/alarm.wav"  # Not used - only voice reminders
+  volume: 0.8
+  repeat_interval: 30  # Not used - keeping for compatibility
+  voice_reminder_interval: 300  # seconds between voice reminders (5 minutes, configurable)
+  auto_stop_after: 1800  # seconds (30 minutes) - auto stop if not acknowledged
+
+# Text-to-Speech Configuration
+tts:
+  engine: "pyttsx3"  # or "gtts" for Google TTS
+  rate: 150
+  volume: 0.9
+  voice: null  # null = default, or specify voice ID
+
+# Speech Recognition Configuration
+speech:
+  engine: "vosk"  # "vosk" or "whisper"
+  model_path: "models/vosk-model-small-en-us-0.15"
+  sample_rate: 16000
+  device_index: null  # null = default microphone
+  
+  # Whisper settings (if using whisper)
+  whisper:
+    model: "base"  # tiny, base, small, medium, large
+    api_key: null  # for OpenAI Whisper API
+    use_api: false  # true for API, false for local
+  
+  # Wake word detection
+  wake_word: "assistant"
+  stop_command: "stop"
+  timeout: 5  # seconds to listen after wake word
+
+# Chatbot Configuration
+chatbot:
+  provider: "openai"  # "openai" or "gemini"
+  
+  # OpenAI settings
+  openai:
+    api_key: "your-openai-api-key"
+    model: "gpt-3.5-turbo"
+    max_tokens: 150
+    temperature: 0.7
+  
+  # Gemini settings
+  gemini:
+    api_key: "your-gemini-api-key"
+    model: "gemini-pro"
+    temperature: 0.7
+
+# Logging Configuration
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file: "logs/pibot.log"
+  max_bytes: 10485760  # 10MB
+  backup_count: 3
