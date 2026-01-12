@@ -32,9 +32,10 @@ except ImportError:
 class ReminderSystem:
     """Main application controller for the AI Reminder System"""
     
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str = "config.yaml", secrets_path: str = "secrets.yaml"):
         # Load configuration
         self.config = self._load_config(config_path)
+        self.secrets = self._load_secrets(secrets_path)
         
         # Setup logging
         self._setup_logging()
@@ -58,7 +59,7 @@ class ReminderSystem:
         self.display = DisplayManager(self.config)
         self.alarm_system = AlarmSystem(self.config, self.display)
         self.voice_recognition = VoiceRecognition(self.config)
-        self.chatbot = Chatbot(self.config)
+        self.chatbot = Chatbot(self.config, self.secrets)
         self.news_fetcher = NewsFetcher(self.config)
         
         # State
@@ -84,6 +85,20 @@ class ReminderSystem:
         except Exception as e:
             print(f"Failed to load config: {e}")
             sys.exit(1)
+    
+    def _load_secrets(self, secrets_path: str) -> dict:
+        """Load secrets from YAML file"""
+        try:
+            if os.path.exists(secrets_path):
+                with open(secrets_path, 'r', encoding='utf-8') as f:
+                    secrets = yaml.safe_load(f)
+                return secrets or {}
+            else:
+                print(f"Warning: Secrets file not found at {secrets_path}")
+                return {}
+        except Exception as e:
+            print(f"Warning: Failed to load secrets: {e}")
+            return {}
     
     def _setup_logging(self):
         """Setup logging configuration"""

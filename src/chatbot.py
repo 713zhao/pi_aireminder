@@ -15,8 +15,9 @@ class ChatProvider(Enum):
 class Chatbot:
     """AI Chatbot using OpenAI or Gemini"""
     
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, secrets: dict = None):
         self.config = config['chatbot']
+        self.secrets = secrets or {}
         self.logger = logging.getLogger(__name__)
         
         # Determine provider
@@ -37,7 +38,8 @@ class Chatbot:
         """Initialize OpenAI client"""
         try:
             import openai
-            api_key = self.config['openai'].get('api_key')
+            # Get API key from secrets file first, fallback to config
+            api_key = self.secrets.get('openai_api_key') or self.config['openai'].get('api_key')
             if not api_key or api_key == 'your-openai-api-key':
                 self.logger.error("OpenAI API key not configured")
                 return
@@ -56,7 +58,8 @@ class Chatbot:
         try:
             import google.generativeai as genai
             
-            api_key = self.config['gemini'].get('api_key')
+            # Get API key from secrets file first, fallback to config
+            api_key = self.secrets.get('gemini_api_key') or self.config['gemini'].get('api_key')
             if not api_key or api_key == 'your-gemini-api-key':
                 self.logger.error("Gemini API key not configured")
                 return
