@@ -21,6 +21,10 @@ logs/
 # Config with sensitive data
 config.local.yaml
 
+# Google OAuth credentials - DO NOT COMMIT
+credentials.json
+token.json
+
 # Models
 models/*.zip
 
@@ -36,3 +40,7 @@ assets/*.wav
 *.tmp
 *.temp
 test.wav
+
+# Test files
+test_*.py
+list_voices.py
