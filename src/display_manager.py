@@ -13,7 +13,9 @@ from event_fetcher import Event
 class DisplayManager:
     """Manages the GUI display for events"""
     
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, secrets: dict = None):
+        self.full_config = config  # Store full config
+        self.secrets = secrets or {}  # Store secrets
         self.config = config['display']
         self.logger = logging.getLogger(__name__)
         
@@ -49,6 +51,10 @@ class DisplayManager:
         self._pending_auto_advance = False
         self._pending_speaking_text = None
         self._pending_hide_speaking = False
+        
+        # Config state
+        self.config_entries = {}  # Store entry widgets for config
+        self.on_save_config_callback = None
         
         # Setup UI
         self._setup_ui()
@@ -190,6 +196,9 @@ class DisplayManager:
         # News Tab
         self._setup_news_tab()
         
+        # Config Tab
+        self._setup_config_tab()
+        
         # Update clock
         self._update_clock()
         
@@ -267,6 +276,474 @@ class DisplayManager:
         
         # Bind tab change event
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+    
+    def _setup_config_tab(self):
+        """Setup the configuration tab"""
+        config_tab = tk.Frame(self.notebook, bg=self.bg_color)
+        self.notebook.add(config_tab, text="⚙️ Config")
+        
+        # Control Frame
+        control_frame = tk.Frame(config_tab, bg=self.accent_color, height=60)
+        control_frame.pack(fill=tk.X, pady=(0, 10))
+        control_frame.pack_propagate(False)
+        
+        button_font = tkfont.Font(family="Helvetica", size=11, weight="bold")
+        
+        # Save Config Button
+        self.save_config_button = tk.Button(
+            control_frame,
+            text="💾 Save Configuration",
+            font=button_font,
+            bg="#4ecca3",
+            fg=self.bg_color,
+            activebackground="#3dbb90",
+            relief=tk.RAISED,
+            bd=2,
+            padx=15,
+            pady=5,
+            cursor="hand2",
+            command=self._on_save_config_click
+        )
+        self.save_config_button.pack(side=tk.LEFT, padx=20, pady=10)
+        
+        # Status label for save feedback
+        self.config_status_label = tk.Label(
+            control_frame,
+            text="",
+            font=tkfont.Font(family="Helvetica", size=11),
+            bg=self.accent_color,
+            fg="#4ecca3"
+        )
+        self.config_status_label.pack(side=tk.LEFT, padx=10)
+        
+        # Scrollable config area
+        config_canvas = tk.Canvas(config_tab, bg=self.bg_color, highlightthickness=0)
+        config_scrollbar = ttk.Scrollbar(config_tab, orient="vertical", command=config_canvas.yview)
+        
+        self.config_scrollable_frame = tk.Frame(config_canvas, bg=self.bg_color)
+        self.config_scrollable_frame.bind(
+            "<Configure>",
+            lambda e: config_canvas.configure(scrollregion=config_canvas.bbox("all"))
+        )
+        
+        config_canvas.create_window((0, 0), window=self.config_scrollable_frame, anchor="nw")
+        config_canvas.configure(yscrollcommand=config_scrollbar.set)
+        
+        config_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        config_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Build config form
+        self._build_config_form()
+        
+    def _build_config_form(self):
+        """Build the configuration form"""
+        form_font = tkfont.Font(family="Helvetica", size=10)
+        label_font = tkfont.Font(family="Helvetica", size=10, weight="bold")
+        section_font = tkfont.Font(family="Helvetica", size=12, weight="bold")
+        
+        # API Keys Section
+        self._add_section_header("🔑 API Keys", section_font)
+        self._add_config_field("OpenAI API Key", "openai_api_key", 
+                              self.secrets.get('openai_api_key', ''),
+                              label_font, form_font, is_secret=True)
+        self._add_config_field("Gemini API Key", "gemini_api_key",
+                              self.secrets.get('gemini_api_key', ''),
+                              label_font, form_font, is_secret=True)
+        
+        self._add_spacer()
+        
+        # TTS Configuration Section
+        self._add_section_header("🔊 Text-to-Speech", section_font)
+        tts_config = self.full_config.get('tts', {})
+        self._add_config_field("Speech Rate (100-200)", "tts.rate",
+                              str(tts_config.get('rate', 140)),
+                              label_font, form_font)
+        self._add_config_field("Volume (0.0-1.0)", "tts.volume",
+                              str(tts_config.get('volume', 0.9)),
+                              label_font, form_font)
+        self._add_config_field("English Voice Name", "tts.voice_name",
+                              tts_config.get('voice_name', 'Microsoft Zira Desktop'),
+                              label_font, form_font)
+        self._add_config_field("Chinese Voice Name", "tts.chinese_voice_name",
+                              tts_config.get('chinese_voice_name', 'Microsoft Huihui Desktop'),
+                              label_font, form_font)
+        
+        self._add_spacer()
+        
+        # Alarm Configuration Section
+        self._add_section_header("⏰ Alarm Settings", section_font)
+        alarm_config = self.full_config.get('alarm', {})
+        self._add_config_field("Voice Reminder Interval (seconds)", "alarm.voice_reminder_interval",
+                              str(alarm_config.get('voice_reminder_interval', 10)),
+                              label_font, form_font)
+        self._add_config_field("Auto Stop After (seconds)", "alarm.auto_stop_after",
+                              str(alarm_config.get('auto_stop_after', 1800)),
+                              label_font, form_font)
+        
+        self._add_spacer()
+        
+        # Chatbot Configuration Section
+        self._add_section_header("🤖 Chatbot", section_font)
+        chatbot_config = self.full_config.get('chatbot', {})
+        self._add_config_field("Provider (openai/gemini)", "chatbot.provider",
+                              chatbot_config.get('provider', 'openai'),
+                              label_font, form_font)
+        
+        openai_config = chatbot_config.get('openai', {})
+        self._add_config_field("OpenAI Model", "chatbot.openai.model",
+                              openai_config.get('model', 'gpt-3.5-turbo'),
+                              label_font, form_font)
+        
+        gemini_config = chatbot_config.get('gemini', {})
+        self._add_config_field("Gemini Model", "chatbot.gemini.model",
+                              gemini_config.get('model', 'gemini-pro'),
+                              label_font, form_font)
+        
+        self._add_spacer()
+        
+        # News Configuration Section
+        self._add_section_header("📰 News Feeds", section_font)
+        news_config = self.full_config.get('news', {})
+        self._add_config_field("Max Items Per Feed", "news.max_items_per_feed",
+                              str(news_config.get('max_items_per_feed', 5)),
+                              label_font, form_font)
+        
+        # All available news feeds (predefined list)
+        all_feeds = {
+            "BBC News": "http://feeds.bbci.co.uk/news/rss.xml",
+            "CNN": "http://rss.cnn.com/rss/edition.rss",
+            "Reuters": "https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best",
+            "TechCrunch": "https://techcrunch.com/feed/",
+            "The Guardian": "https://www.theguardian.com/world/rss",
+            "China Daily": "http://www.chinadaily.com.cn/rss/world_rss.xml",
+            "Xinhua English": "http://www.news.cn/english/rss/englishrssnew.xml",
+            "CGTN": "https://www.cgtn.com/rss/news.xml",
+            "South China Morning Post": "https://www.scmp.com/rss/91/feed",
+            "中新网即时新闻": "https://www.chinanews.com.cn/rss/scroll-news.xml"
+        }
+        
+        # Current active feeds from config
+        active_feeds = news_config.get('feeds', {})
+        
+        # Add checkboxes for each feed
+        self._add_news_feed_checkboxes(all_feeds, active_feeds, label_font)
+        
+        # Add custom feed input
+        self._add_custom_feed_input(active_feeds, all_feeds, label_font, form_font)
+        
+    def _add_news_feed_checkboxes(self, all_feeds, active_feeds, label_font):
+        """Add checkboxes for news feeds"""
+        self.feed_checkboxes = {}
+        
+        feeds_label = tk.Label(
+            self.config_scrollable_frame,
+            text="Select News Sources:",
+            font=label_font,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            anchor=tk.W
+        )
+        feeds_label.pack(fill=tk.X, padx=10, pady=(10, 5))
+        
+        # Create frame for checkboxes
+        checkbox_frame = tk.Frame(self.config_scrollable_frame, bg=self.bg_color)
+        checkbox_frame.pack(fill=tk.X, padx=20, pady=5)
+        
+        for feed_name, feed_url in all_feeds.items():
+            var = tk.BooleanVar(value=feed_name in active_feeds)
+            
+            cb = tk.Checkbutton(
+                checkbox_frame,
+                text=feed_name,
+                variable=var,
+                bg=self.bg_color,
+                fg=self.fg_color,
+                selectcolor=self.accent_color,
+                activebackground=self.bg_color,
+                activeforeground=self.fg_color,
+                font=tkfont.Font(family="Helvetica", size=10),
+                anchor=tk.W
+            )
+            cb.pack(anchor=tk.W, pady=2)
+            
+            self.feed_checkboxes[feed_name] = {
+                'var': var,
+                'url': feed_url
+            }
+    
+    def _add_custom_feed_input(self, active_feeds, all_feeds, label_font, form_font):
+        """Add input fields for custom news feeds"""
+        custom_label = tk.Label(
+            self.config_scrollable_frame,
+            text="Add Custom Feed:",
+            font=label_font,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            anchor=tk.W
+        )
+        custom_label.pack(fill=tk.X, padx=10, pady=(15, 5))
+        
+        # Custom feed container
+        custom_frame = tk.Frame(self.config_scrollable_frame, bg=self.accent_color, relief=tk.RAISED, bd=2)
+        custom_frame.pack(fill=tk.X, padx=20, pady=5)
+        
+        # Feed name input
+        name_row = tk.Frame(custom_frame, bg=self.accent_color)
+        name_row.pack(fill=tk.X, padx=10, pady=(10, 5))
+        
+        name_label = tk.Label(
+            name_row,
+            text="Feed Name:",
+            font=form_font,
+            bg=self.accent_color,
+            fg=self.fg_color,
+            width=15,
+            anchor=tk.W
+        )
+        name_label.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.custom_feed_name = tk.Entry(
+            name_row,
+            font=form_font,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            insertbackground=self.fg_color,
+            relief=tk.FLAT
+        )
+        self.custom_feed_name.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
+        
+        # Feed URL input
+        url_row = tk.Frame(custom_frame, bg=self.accent_color)
+        url_row.pack(fill=tk.X, padx=10, pady=(5, 5))
+        
+        url_label = tk.Label(
+            url_row,
+            text="Feed URL:",
+            font=form_font,
+            bg=self.accent_color,
+            fg=self.fg_color,
+            width=15,
+            anchor=tk.W
+        )
+        url_label.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.custom_feed_url = tk.Entry(
+            url_row,
+            font=form_font,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            insertbackground=self.fg_color,
+            relief=tk.FLAT
+        )
+        self.custom_feed_url.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
+        
+        # Add button
+        add_button = tk.Button(
+            custom_frame,
+            text="➕ Add Feed",
+            font=tkfont.Font(family="Helvetica", size=10, weight="bold"),
+            bg="#4ecca3",
+            fg=self.bg_color,
+            activebackground="#3dbb90",
+            relief=tk.RAISED,
+            bd=2,
+            padx=10,
+            pady=3,
+            cursor="hand2",
+            command=self._on_add_custom_feed
+        )
+        add_button.pack(pady=(5, 10))
+        
+        # List of custom feeds
+        self.custom_feeds_listbox_frame = tk.Frame(self.config_scrollable_frame, bg=self.bg_color)
+        self.custom_feeds_listbox_frame.pack(fill=tk.X, padx=20, pady=(5, 10))
+        
+        # Store custom feeds added during session
+        self.custom_feeds_list = []
+        self._load_custom_feeds(active_feeds, all_feeds)
+    
+    def _load_custom_feeds(self, active_feeds, predefined_feeds):
+        """Load custom feeds that are not in the predefined list"""
+        for feed_name, feed_url in active_feeds.items():
+            if feed_name not in predefined_feeds:
+                self._add_custom_feed_to_list(feed_name, feed_url)
+    
+    def _on_add_custom_feed(self):
+        """Handle adding a custom feed"""
+        name = self.custom_feed_name.get().strip()
+        url = self.custom_feed_url.get().strip()
+        
+        if name and url:
+            self._add_custom_feed_to_list(name, url)
+            
+            # Clear inputs
+            self.custom_feed_name.delete(0, tk.END)
+            self.custom_feed_url.delete(0, tk.END)
+        else:
+            # Show error message briefly
+            self.config_status_label.config(text="⚠️ Please enter both name and URL", fg="#e94560")
+            self.root.after(3000, lambda: self.config_status_label.config(text=""))
+    
+    def _add_custom_feed_to_list(self, name, url):
+        """Add a custom feed to the display list"""
+        feed_frame = tk.Frame(self.custom_feeds_listbox_frame, bg=self.accent_color, relief=tk.RAISED, bd=1)
+        feed_frame.pack(fill=tk.X, pady=2)
+        
+        var = tk.BooleanVar(value=True)
+        
+        cb = tk.Checkbutton(
+            feed_frame,
+            text=f"{name}",
+            variable=var,
+            bg=self.accent_color,
+            fg=self.fg_color,
+            selectcolor=self.bg_color,
+            activebackground=self.accent_color,
+            activeforeground=self.fg_color,
+            font=tkfont.Font(family="Helvetica", size=9),
+            anchor=tk.W
+        )
+        cb.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5, pady=2)
+        
+        # Delete button
+        del_btn = tk.Button(
+            feed_frame,
+            text="🗑️",
+            bg=self.alarm_color,
+            fg=self.fg_color,
+            relief=tk.FLAT,
+            bd=0,
+            padx=5,
+            cursor="hand2",
+            command=lambda: self._remove_custom_feed(feed_frame, name)
+        )
+        del_btn.pack(side=tk.RIGHT, padx=5, pady=2)
+        
+        self.custom_feeds_list.append({
+            'name': name,
+            'url': url,
+            'var': var,
+            'frame': feed_frame
+        })
+    
+    def _remove_custom_feed(self, frame, name):
+        """Remove a custom feed from the list"""
+        frame.destroy()
+        self.custom_feeds_list = [f for f in self.custom_feeds_list if f['name'] != name]
+        
+    def _add_section_header(self, text, font):
+        """Add a section header"""
+        header = tk.Label(
+            self.config_scrollable_frame,
+            text=text,
+            font=font,
+            bg=self.bg_color,
+            fg="#4ecca3",
+            anchor=tk.W
+        )
+        header.pack(fill=tk.X, padx=10, pady=(15, 5))
+        
+        separator = tk.Frame(self.config_scrollable_frame, bg=self.highlight_color, height=2)
+        separator.pack(fill=tk.X, padx=10, pady=(0, 10))
+    
+    def _add_config_field(self, label_text, config_key, value, label_font, entry_font, is_secret=False):
+        """Add a configuration field"""
+        row_frame = tk.Frame(self.config_scrollable_frame, bg=self.bg_color)
+        row_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        label = tk.Label(
+            row_frame,
+            text=label_text + ":",
+            font=label_font,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            width=30,
+            anchor=tk.W
+        )
+        label.pack(side=tk.LEFT, padx=(0, 10))
+        
+        entry = tk.Entry(
+            row_frame,
+            font=entry_font,
+            bg=self.accent_color,
+            fg=self.fg_color,
+            insertbackground=self.fg_color,
+            relief=tk.FLAT,
+            show="*" if is_secret else None
+        )
+        entry.insert(0, value)
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5, padx=(0, 10))
+        
+        self.config_entries[config_key] = entry
+    
+    def _add_info_text(self, label_text, info_text, label_font, text_font):
+        """Add an informational text area"""
+        row_frame = tk.Frame(self.config_scrollable_frame, bg=self.bg_color)
+        row_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        label = tk.Label(
+            row_frame,
+            text=label_text + ":",
+            font=label_font,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            anchor=tk.NW
+        )
+        label.pack(anchor=tk.W, padx=(0, 10), pady=(0, 5))
+        
+        text_widget = tk.Text(
+            row_frame,
+            font=text_font,
+            bg=self.accent_color,
+            fg=self.fg_color,
+            height=6,
+            wrap=tk.WORD,
+            relief=tk.FLAT,
+            state=tk.DISABLED
+        )
+        text_widget.pack(fill=tk.X, expand=True)
+        
+        # Enable, insert text, then disable again
+        text_widget.config(state=tk.NORMAL)
+        text_widget.insert(1.0, info_text)
+        text_widget.config(state=tk.DISABLED)
+    
+    def _add_spacer(self):
+        """Add a spacer between sections"""
+        spacer = tk.Frame(self.config_scrollable_frame, bg=self.bg_color, height=10)
+        spacer.pack(fill=tk.X)
+    
+    def _on_save_config_click(self):
+        """Handle save config button click"""
+        if self.on_save_config_callback:
+            # Collect values from entries
+            config_values = {}
+            for key, entry in self.config_entries.items():
+                config_values[key] = entry.get()
+            
+            # Collect selected news feeds
+            news_feeds = {}
+            
+            # Add predefined feeds that are checked
+            for feed_name, feed_data in self.feed_checkboxes.items():
+                if feed_data['var'].get():
+                    news_feeds[feed_name] = feed_data['url']
+            
+            # Add custom feeds that are checked
+            for custom_feed in self.custom_feeds_list:
+                if custom_feed['var'].get():
+                    news_feeds[custom_feed['name']] = custom_feed['url']
+            
+            config_values['news.feeds'] = news_feeds
+            
+            self.on_save_config_callback(config_values)
+            self.config_status_label.config(text="✅ Configuration saved!", fg="#4ecca3")
+            # Clear status after 3 seconds
+            self.root.after(3000, lambda: self.config_status_label.config(text=""))
+        
+    def set_config_callback(self, callback):
+        """Set callback for config save"""
+        self.on_save_config_callback = callback
         
     def _auto_refresh_events(self):
         """Auto-refresh events display to update statuses"""

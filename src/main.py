@@ -72,6 +72,7 @@ class ReminderSystem:
         self.voice_recognition.on_text = self._handle_voice_text
         self.display.set_stop_alarm_callback(self._stop_alarm)
         self.display.set_news_callbacks(self._fetch_news, self._read_news)
+        self.display.set_config_callback(self._save_configuration)
         
         # Background threads
         self.check_thread = None
@@ -346,6 +347,126 @@ class ReminderSystem:
         
         thread = threading.Thread(target=speak_and_advance, daemon=True)
         thread.start()
+    
+    def _save_configuration(self, config_values: dict):
+        """Save configuration changes to files"""
+        import yaml
+        
+        try:
+            # Separate secrets from config
+            secrets_to_save = {}
+            config_to_save = dict(self.config)  # Make a copy
+            
+            for key, value in config_values.items():
+                if key in ['openai_api_key', 'gemini_api_key']:
+                    # Save to secrets
+                    secrets_to_save[key] = value
+                elif key == 'news.feeds':
+                    # Handle news feeds dictionary specially
+                    if 'news' not in config_to_save:
+                        config_to_save['news'] = {}
+                    config_to_save['news']['feeds'] = value
+                else:
+                    # Save to config
+                    keys = key.split('.')
+                    current = config_to_save
+                    
+                    # Navigate to the nested dict
+                    for k in keys[:-1]:
+                        if k not in current:
+                            current[k] = {}
+                        current = current[k]
+                    
+                    # Convert numeric values
+                    final_key = keys[-1]
+                    if key in ['tts.rate', 'alarm.voice_reminder_interval', 'alarm.auto_stop_after', 'news.max_items_per_feed']:
+                        try:
+                            current[final_key] = int(value)
+                        except ValueError:
+                            current[final_key] = value
+                    elif key in ['tts.volume']:
+                        try:
+                            current[final_key] = float(value)
+                        except ValueError:
+                            current[final_key] = value
+                    else:
+                        current[final_key] = value
+            
+            # Write config.yaml
+            with open('config.yaml', 'w', encoding='utf-8') as f:
+                yaml.dump(config_to_save, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            
+            # Write secrets.yaml
+            if secrets_to_save:
+                with open('secrets.yaml', 'w', encoding='utf-8') as f:
+                    f.write("# API Keys and Secrets Configuration\n")
+                    f.write("# DO NOT COMMIT THIS FILE TO VERSION CONTROL\n\n")
+                    for key, value in secrets_to_save.items():
+                        f.write(f"# {key.replace('_', ' ').title()}\n")
+                        f.write(f'{key}: "{value}"\n\n')
+            
+            self.logger.info("Configuration saved successfully")
+            
+            # Update internal config
+            self.config = config_to_save
+            self.secrets.update(secrets_to_save)
+            
+            # Apply configuration changes immediately
+            self._apply_config_changes(config_values, secrets_to_save)
+            
+        except Exception as e:
+            self.logger.error(f"Error saving configuration: {e}")
+    
+    def _apply_config_changes(self, config_values: dict, secrets_changes: dict):
+        """Apply configuration changes to running components"""
+        try:
+            # Update TTS settings in alarm system
+            if any(key.startswith('tts.') for key in config_values.keys()):
+                self.logger.info("Updating TTS settings...")
+                self.alarm_system.tts_config = self.config['tts']
+                self.alarm_system.update_tts_settings()
+            
+            # Update alarm settings
+            if any(key.startswith('alarm.') for key in config_values.keys()):
+                self.logger.info("Updating alarm settings...")
+                self.alarm_system.alarm_config = self.config['alarm']
+            
+            # Update chatbot if API keys changed
+            if secrets_changes:
+                self.logger.info("Updating chatbot with new API keys...")
+                self.chatbot.secrets = self.secrets
+                # Reinitialize chatbot client
+                provider_name = self.config['chatbot'].get('provider', 'openai').lower()
+                if provider_name == 'openai':
+                    self.chatbot._init_openai()
+                else:
+                    self.chatbot._init_gemini()
+            
+            # Update chatbot provider/model if changed
+            if any(key.startswith('chatbot.') for key in config_values.keys()):
+                self.logger.info("Updating chatbot settings...")
+                self.chatbot.config = self.config['chatbot']
+                # Reinitialize if provider changed
+                if 'chatbot.provider' in config_values:
+                    provider_name = config_values['chatbot.provider'].lower()
+                    from chatbot import ChatProvider
+                    self.chatbot.provider = ChatProvider.OPENAI if provider_name == 'openai' else ChatProvider.GEMINI
+                    if self.chatbot.provider == ChatProvider.OPENAI:
+                        self.chatbot._init_openai()
+                    else:
+                        self.chatbot._init_gemini()
+            
+            # Update news fetcher if feeds changed
+            if 'news.feeds' in config_values or 'news.max_items_per_feed' in config_values:
+                self.logger.info("Updating news fetcher settings...")
+                self.news_fetcher.config = self.config
+                self.news_fetcher.feeds = self.config['news']['feeds']
+                self.logger.info(f"News feeds updated: {len(self.news_fetcher.feeds)} feeds active")
+            
+            self.logger.info("Configuration changes applied successfully")
+            
+        except Exception as e:
+            self.logger.error(f"Error applying configuration changes: {e}")
     
     def stop(self):
         """Stop the reminder system"""

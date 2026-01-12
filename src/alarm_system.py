@@ -82,6 +82,20 @@ class AlarmSystem:
             self.logger.error(f"Failed to initialize TTS: {e}")
             return None
     
+    def update_tts_settings(self):
+        """Update TTS settings without reinitializing the engine"""
+        try:
+            if self.tts_engine:
+                rate = self.tts_config.get('rate', 150)
+                volume = self.tts_config.get('volume', 0.9)
+                
+                self.tts_engine.setProperty('rate', rate)
+                self.tts_engine.setProperty('volume', volume)
+                
+                self.logger.info(f"TTS settings updated: rate={rate}, volume={volume}")
+        except Exception as e:
+            self.logger.error(f"Failed to update TTS settings: {e}")
+    
     def trigger_alarm(self, event: Event):
         """Trigger an alarm for an event"""
         if self.is_playing:
