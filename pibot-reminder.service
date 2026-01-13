@@ -1,18 +1,17 @@
 [Unit]
 Description=AI Reminder System on Raspberry Pi
-After=network.target sound.target
+After=graphical-session.target sound.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/PiBot
+WorkingDirectory=/home/eric/pi_aireminder
 Environment="DISPLAY=:0"
-Environment="XAUTHORITY=/home/pi/.Xauthority"
-ExecStart=/home/pi/PiBot/venv/bin/python /home/pi/PiBot/src/main.py
+Environment="XAUTHORITY=/home/eric/.Xauthority"
+ExecStart=/home/eric/pi_aireminder/venv/bin/python /home/eric/pi_aireminder/src/main.py
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
