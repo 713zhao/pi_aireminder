@@ -199,6 +199,9 @@ class DisplayManager:
         # Config Tab
         self._setup_config_tab()
         
+        # Switch to News tab by default (tab index 1)
+        self.notebook.select(1)
+        
         # Update clock
         self._update_clock()
         

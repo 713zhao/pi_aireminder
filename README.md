@@ -12,7 +12,14 @@ This will:
 - Generate a sample alarm sound
 - Check for installed dependencies
 
-### 2. Install Python Dependencies
+### 2. Install System Dependencies
+```bash
+# Install required system packages
+sudo apt-get update
+sudo apt-get install -y portaudio19-dev python3-pyaudio espeak espeak-ng
+```
+
+### 3. Install Python Dependencies
 ```bash
 # Create virtual environment (recommended)
 python3 -m venv venv
@@ -22,7 +29,7 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 3. Download Vosk Model (for offline speech recognition)
+### 4. Download Vosk Model (for offline speech recognition)
 ```bash
 # Download and extract the model
 wget https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
@@ -32,7 +39,7 @@ unzip vosk-model-small-en-us-0.15.zip -d models/
 # wget https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip
 ```
 
-### 4. Configure the System
+### 5. Configure the System
 
 Edit `config.yaml`:
 
@@ -48,7 +55,7 @@ chatbot:
     api_key: "sk-your-actual-api-key"
 ```
 
-### 5. Test Audio Devices
+### 6. Test Audio Devices
 
 ```bash
 # List audio devices
@@ -61,7 +68,7 @@ python -c "import speech_recognition as sr; r = sr.Recognizer(); m = sr.Micropho
 python -c "import pyttsx3; engine = pyttsx3.init(); engine.say('Testing audio'); engine.runAndWait()"
 ```
 
-### 6. Run the Application
+### 7. Run the Application
 
 ```bash
 python src/main.py

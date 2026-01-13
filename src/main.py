@@ -153,6 +153,10 @@ class ReminderSystem:
         # Fetch initial events
         self._fetch_and_update_events()
         
+        # Auto-fetch news on startup
+        self.logger.info("Fetching initial news")
+        self._fetch_news()
+        
         # Start voice recognition
         self.voice_recognition.start_listening()
         

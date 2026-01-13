@@ -3,12 +3,16 @@ Alarm System Module
 Handles alarm sounds and Text-to-Speech
 """
 import os
+import sys
+import platform
 import logging
 import threading
 from typing import Optional
 from datetime import datetime
+import tempfile
 import pygame
 import pyttsx3
+from gtts import gTTS
 from event_fetcher import Event
 
 
@@ -23,6 +27,10 @@ class AlarmSystem:
         
         # Reference to display manager for showing speech text
         self.display_manager = display_manager
+        
+        # Detect OS for TTS method selection
+        self.is_windows = platform.system() == 'Windows'
+        self.logger.info(f"Running on {platform.system()}, using {'Windows SAPI' if self.is_windows else 'Linux TTS'}")
         
         # Initialize pygame for sound
         pygame.mixer.init()
@@ -218,6 +226,10 @@ class AlarmSystem:
         
         self.is_playing = False
     
+    def _contains_chinese(self, text: str) -> bool:
+        """Check if text contains Chinese characters"""
+        return any('\u4e00' <= char <= '\u9fff' for char in text)
+    
     def _speak(self, text: str):
         """Speak text using TTS"""
         if not self.tts_engine:
@@ -235,45 +247,11 @@ class AlarmSystem:
                 if self.display_manager:
                     self.display_manager.show_speaking_text(text)
                 
-                # Use Windows SAPI directly - more reliable in threads
-                import win32com.client
-                speaker = win32com.client.Dispatch("SAPI.SpVoice")
-                
-                # Detect if text contains Chinese characters
-                def contains_chinese(text):
-                    return any('\u4e00' <= char <= '\u9fff' for char in text)
-                
-                # Select voice based on language
-                is_chinese = contains_chinese(text)
-                if is_chinese:
-                    voice_name = self.tts_config.get('chinese_voice_name', 'Microsoft Huihui Desktop')
+                # Use Windows-specific TTS on Windows
+                if self.is_windows:
+                    self._speak_windows(text)
                 else:
-                    voice_name = self.tts_config.get('voice_name')
-                
-                # Try to find and set the voice by name
-                if voice_name:
-                    voices = speaker.GetVoices()
-                    for i in range(voices.Count):
-                        voice = voices.Item(i)
-                        if voice_name in voice.GetDescription():
-                            speaker.Voice = voice
-                            self.logger.info(f"Using voice: {voice.GetDescription()}")
-                            break
-                
-                # Configure voice settings
-                rate = self.tts_config.get('rate', 150)
-                volume = self.tts_config.get('volume', 0.9)
-                
-                # SAPI rate is -10 to 10, pyttsx3 is ~100-200
-                # Convert: pyttsx3 150 = SAPI 0
-                sapi_rate = int((rate - 150) / 15)  # -10 to 10 range
-                sapi_rate = max(-10, min(10, sapi_rate))
-                
-                speaker.Rate = sapi_rate
-                speaker.Volume = int(volume * 100)  # 0-100
-                
-                # Speak (this is synchronous but doesn't hang like pyttsx3)
-                speaker.Speak(text)
+                    self._speak_linux(text)
                 
                 # Hide speaking text after speech completes
                 if self.display_manager:
@@ -284,6 +262,93 @@ class AlarmSystem:
             except Exception as e:
                 self.logger.error(f"TTS error: {e}")
                 print(f"❌ TTS error: {e}")
+    
+    def _speak_windows(self, text: str):
+        """Speak text using Windows SAPI"""
+        import win32com.client
+        speaker = win32com.client.Dispatch("SAPI.SpVoice")
+        
+        # Detect if text contains Chinese characters
+        is_chinese = self._contains_chinese(text)
+        if is_chinese:
+            voice_name = self.tts_config.get('chinese_voice_name', 'Microsoft Huihui Desktop')
+        else:
+            voice_name = self.tts_config.get('voice_name')
+        
+        # Try to find and set the voice by name
+        if voice_name:
+            voices = speaker.GetVoices()
+            for i in range(voices.Count):
+                voice = voices.Item(i)
+                if voice_name in voice.GetDescription():
+                    speaker.Voice = voice
+                    self.logger.info(f"Using voice: {voice.GetDescription()}")
+                    break
+        
+        # Configure voice settings
+        rate = self.tts_config.get('rate', 150)
+        volume = self.tts_config.get('volume', 0.9)
+        
+        # SAPI rate is -10 to 10, pyttsx3 is ~100-200
+        # Convert: pyttsx3 150 = SAPI 0
+        sapi_rate = int((rate - 150) / 15)  # -10 to 10 range
+        sapi_rate = max(-10, min(10, sapi_rate))
+        
+        speaker.Rate = sapi_rate
+        speaker.Volume = int(volume * 100)  # 0-100
+        
+        # Speak (this is synchronous)
+        self.logger.info(f"Using Windows SAPI for {'Chinese' if is_chinese else 'English'} text")
+        speaker.Speak(text)
+    
+    def _speak_linux(self, text: str):
+        """Speak text using Linux TTS (gTTS for better quality voices)"""
+        # Use gTTS for both Chinese and English for better quality
+        if self._contains_chinese(text):
+            # Use gTTS for Chinese text
+            self.logger.info("Using gTTS for Chinese text")
+            lang = 'zh-CN'
+        else:
+            # Use gTTS for English text with better female voice
+            self.logger.info("Using gTTS for English text")
+            lang = 'en'
+        
+        try:
+            tts = gTTS(text=text, lang=lang, slow=False)
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
+                temp_file = fp.name
+                tts.save(temp_file)
+            
+            # Play the audio file using pygame
+            try:
+                pygame.mixer.music.load(temp_file)
+                volume = self.tts_config.get('volume', 0.9)
+                pygame.mixer.music.set_volume(volume)
+                pygame.mixer.music.play()
+                
+                # Wait for playback to finish
+                while pygame.mixer.music.get_busy():
+                    pygame.time.Clock().tick(10)
+            finally:
+                # Clean up temp file
+                try:
+                    os.unlink(temp_file)
+                except:
+                    pass
+        except Exception as e:
+            self.logger.error(f"gTTS error: {e}, falling back to pyttsx3")
+            # Fallback to pyttsx3 if gTTS fails
+            rate = self.tts_config.get('rate', 150)
+            volume = self.tts_config.get('volume', 0.9)
+            
+            self.tts_engine.setProperty('rate', rate)
+            self.tts_engine.setProperty('volume', volume)
+            
+            # Speak (synchronous)
+            self.tts_engine.say(text)
+            self.tts_engine.runAndWait()
     
     def speak_async(self, text: str):
         """Speak text asynchronously without blocking"""
