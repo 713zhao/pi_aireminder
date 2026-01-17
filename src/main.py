@@ -36,14 +36,26 @@ class ReminderSystem:
         # Load configuration
         self.config = self._load_config(config_path)
         self.secrets = self._load_secrets(secrets_path)
-        
+
         # Setup logging
         self._setup_logging()
         self.logger = logging.getLogger(__name__)
         self.logger.info("=" * 60)
         self.logger.info("AI Reminder System Starting")
         self.logger.info("=" * 60)
-        
+
+        # Set system volume from config if available
+        system_cfg = self.config.get('system', {})
+        default_volume = system_cfg.get('default_volume')
+        if default_volume is not None:
+            try:
+                # Clamp value between 0 and 100
+                vol = max(0, min(100, int(default_volume)))
+                os.system(f"amixer set Master {vol}%")
+                self.logger.info(f"System volume set to {vol}% from config.yaml")
+            except Exception as e:
+                self.logger.warning(f"Failed to set system volume: {e}")
+
         # Initialize components
         # Choose event source based on config
         event_source = self.config.get('event_source', 'backend')
@@ -55,27 +67,34 @@ class ReminderSystem:
                 self.logger.warning("Google Calendar requested but not available, falling back to backend API")
             self.logger.info("Using Backend API as event source")
             self.event_fetcher = EventFetcher(self.config)
-        
+
         self.display = DisplayManager(self.config)
         self.alarm_system = AlarmSystem(self.config, self.display)
         self.voice_recognition = VoiceRecognition(self.config)
+        self.display.voice_recognition = self.voice_recognition  # Ensure display can process audio queue
         self.chatbot = Chatbot(self.config, self.secrets)
         self.news_fetcher = NewsFetcher(self.config)
-        
+
         # State
         self.events: List[Event] = []
         self.current_alarm_event = None
         self.running = False
-        
+
         # Setup callbacks
         self.voice_recognition.on_command = self._handle_voice_command
         self.voice_recognition.on_text = self._handle_voice_text
         self.display.set_stop_alarm_callback(self._stop_alarm)
         self.display.set_news_callbacks(self._fetch_news, self._read_news)
         self.display.set_config_callback(self._save_configuration)
-        
+
         # Background threads
         self.check_thread = None
+
+        # News TTS queue and worker
+        self.news_tts_queue = []
+        self.news_tts_thread = None
+        self.news_tts_stop_event = threading.Event()
+        self.news_cancel_token = 0  # Sync with display_manager
         
     def _load_config(self, config_path: str) -> dict:
         """Load configuration from YAML file"""
@@ -154,7 +173,7 @@ class ReminderSystem:
         self._fetch_and_update_events()
         
         # Auto-fetch news on startup
-        self.logger.info("Fetching initial news")
+        self.logger.info("Fetching initial news on startup")
         self._fetch_news()
         
         # Start voice recognition
@@ -188,14 +207,22 @@ class ReminderSystem:
             try:
                 # Update GUI
                 self.display.update()
-                
+
+                # Check for session timeout (silence)
+                if self.voice_recognition.session_active:
+                    if not self.voice_recognition.is_session_active():
+                        self.logger.info("Session timed out due to silence. Disabling session.")
+                        self.voice_recognition.disable_session()
+                        self.chatbot.clear_history()
+                        self.display.update_status("🟢 Session ended due to silence", "#4ecca3")
+
                 # Periodic refresh
                 if time.time() - last_refresh >= refresh_interval:
                     self._fetch_and_update_events()
                     last_refresh = time.time()
-                
+
                 time.sleep(0.1)
-                
+
             except Exception as e:
                 self.logger.error(f"Error in GUI loop: {e}")
                 break
@@ -266,25 +293,71 @@ class ReminderSystem:
             self._stop_alarm()
     
     def _handle_voice_text(self, text: str):
-        """Handle general voice text (for chatbot)"""
-        self.logger.info(f"Voice text: {text}")
-        
+        """Handle general voice text (for chatbot, session-aware)"""
+        # Remove verbose debug/info logs for production
+        # self.logger.info(f"[DEBUG] Voice text received for chatbot: {text}")
+
         # Check if alarm is active - prioritize stop command
         if self.alarm_system.is_playing:
             if 'stop' in text.lower():
+                self.logger.info("[DEBUG] Stop command detected during alarm.")
                 self._stop_alarm()
                 return
-        
-        # Send to chatbot
-        self.display.update_status("🤔 Processing...", "#f39c12")
-        response = self.chatbot.chat(text)
-        
-        if response:
-            self.logger.info(f"Chatbot response: {response}")
-            self.alarm_system.speak_async(response)
-            self.display.update_status(f"💬 {response[:50]}...", "#3498db")
+        # Stop auto-reading news if 'stop' is said
+        if 'stop' in text.lower() and hasattr(self.display, 'stop_auto_read'):
+            # Set auto_read_active to False immediately for atomic interruption
+            if hasattr(self.display, 'auto_read_active'):
+                self.display.auto_read_active = False
+            self.display.stop_auto_read()
+            self.stop_news_tts()
+            self.logger.info("[DEBUG] Stop command detected: Stopping auto-read news and TTS queue.")
+            self.alarm_system.stop_speaking()
+            return
+
+        # Only stop speaking if:
+        # 1. Chat session is enabled and user is chatting with LLM
+        # 2. User is using stop command
+        # 3. User is using wakeup words
+        should_stop = False
+        if self.voice_recognition.is_session_active():
+            should_stop = True
+        elif any(text.lower().startswith(w) for w in self.voice_recognition.wake_words):
+            should_stop = True
+        elif self.voice_recognition.stop_command in text.lower():
+            should_stop = True
+        if should_stop:
+            self.alarm_system.stop_speaking()
+
+        # Only process chatbot if session is active
+        if self.voice_recognition.is_session_active():
+            self.display.update_status("🤔 Processing...", "#f39c12")
+            self.logger.info(f"[DEBUG] Sending to chatbot (provider: {self.chatbot.provider}): {text}")
+            response = self.chatbot.chat(text)
+            self.logger.info(f"[DEBUG] Chatbot raw response: {response}")
+
+            if response:
+                self.alarm_system.speak_async(response)
+                self.display.update_status(f"💬 {response[:50]}...", "#3498db")
+            else:
+                self.logger.info("[DEBUG] No chatbot response, returning to listening state.")
+                self.display.update_status("🟢 System Active - Listening", "#4ecca3")
         else:
             self.display.update_status("🟢 System Active - Listening", "#4ecca3")
+
+        # Only clear chatbot history when session is explicitly disabled
+        if self.voice_recognition.session_active:
+            self.last_session_state = True
+        else:
+            if hasattr(self, 'last_session_state') and self.last_session_state:
+                self.chatbot.clear_history()
+                self.last_session_state = False
+
+        # Add voice command to enable RSS news reading
+        for wake_word in self.voice_recognition.wake_words:
+            if text.lower().startswith(wake_word + " news") or text.lower().startswith(wake_word + " read news"):
+                self.logger.info("Voice command detected: Enable RSS news reading")
+                self._fetch_news()
+                return
     
     def _stop_alarm(self):
         """Stop the current alarm"""
@@ -321,36 +394,70 @@ class ReminderSystem:
             self.display.start_auto_read()
     
     def _read_news(self, news_item, auto_advance=False):
-        """Read a news item using TTS"""
-        self.logger.info(f"Reading news: {news_item.title} (auto_advance={auto_advance})")
-        
-        # Construct text to read
-        text_to_read = f"News from {news_item.source}. {news_item.title}. {news_item.description}"
-        
-        # Use alarm system's TTS in a thread to allow auto-advance
-        import threading
-        def speak_and_advance():
+        """Read a news item using TTS via a single-threaded, interruptible queue."""
+        # Capture cancel token at scheduling time
+        cancel_token = getattr(self.display, '_news_cancel_token', 0)
+        self.news_tts_queue.append((news_item, auto_advance, cancel_token))
+        if not self.news_tts_thread or not self.news_tts_thread.is_alive():
+            self.news_tts_stop_event.clear()
+            self.news_tts_thread = threading.Thread(target=self._news_tts_worker, daemon=True)
+            self.news_tts_thread.start()
+
+    def _news_tts_worker(self):
+        while self.news_tts_queue and not self.news_tts_stop_event.is_set():
+            news_item, auto_advance, scheduled_token = self.news_tts_queue.pop(0)
+            # Check cancellation token before TTS
+            current_token = getattr(self.display, '_news_cancel_token', 0)
+            if scheduled_token != current_token:
+                self.logger.info("[QUEUE] News TTS cancelled by token (before TTS)")
+                break
+            if hasattr(self.display, 'auto_read_active') and not self.display.auto_read_active:
+                self.logger.info("_news_tts_worker: Auto-read not active, aborting news read.")
+                break
+            text_to_read = f"News from {news_item.source}. {news_item.title}. {news_item.description}."
             try:
-                self.logger.info(f"Starting TTS in thread (auto_advance={auto_advance})")
-                # Speak synchronously
+                self.logger.info(f"[QUEUE] Starting TTS (auto_advance={auto_advance})")
                 self.alarm_system._speak(text_to_read)
-                
-                self.logger.info(f"TTS completed, checking auto_advance: {auto_advance}")
-                # If auto-advance, move to next news after speaking
-                if auto_advance:
+                # Check cancellation token after TTS
+                current_token = getattr(self.display, '_news_cancel_token', 0)
+                if scheduled_token != current_token:
+                    self.logger.info("[QUEUE] News TTS cancelled by token (after TTS)")
+                    break
+                auto_advance_now = auto_advance and getattr(self.display, 'auto_read_active', False)
+                self.logger.info(f"[QUEUE] TTS completed, checking auto_advance: {auto_advance_now}")
+                if self.news_tts_stop_event.is_set() or not getattr(self.display, 'auto_read_active', False):
+                    self.logger.info("[QUEUE] Stop event set or auto_read_active is False after TTS; not advancing.")
+                    break
+                if auto_advance_now:
+                    self.logger.info("[QUEUE] Waiting 2 seconds before advancing...")
                     import time
-                    self.logger.info("Waiting 2 seconds before advancing...")
-                    time.sleep(2)  # Brief pause between articles
-                    # Schedule the advance on the main thread
-                    self.logger.info("Scheduling auto-advance to next news")
+                    time.sleep(2)
+                    # Check cancellation token before scheduling auto-advance
+                    current_token = getattr(self.display, '_news_cancel_token', 0)
+                    if scheduled_token != current_token:
+                        self.logger.info("[QUEUE] News TTS cancelled by token (before auto-advance)")
+                        break
+                    if self.news_tts_stop_event.is_set() or not getattr(self.display, 'auto_read_active', False):
+                        self.logger.info("[QUEUE] Stop event set or auto_read_active is False after wait; not scheduling auto-advance.")
+                        break
+                    self.logger.info("[QUEUE] Scheduling auto-advance to next news")
                     self.display.schedule_auto_advance()
                 else:
-                    self.logger.info("Auto-advance is False, not advancing")
+                    self.logger.info("[QUEUE] Auto-advance is False, not advancing")
             except Exception as e:
-                self.logger.error(f"Error in speak_and_advance: {e}")
-        
-        thread = threading.Thread(target=speak_and_advance, daemon=True)
-        thread.start()
+                self.logger.error(f"[QUEUE] Error in TTS: {e}")
+
+    def stop_news_tts(self):
+        """Immediately stop all queued and running news TTS, and clear any pending auto-advance."""
+        self.news_tts_stop_event.set()
+        self.news_tts_queue.clear()
+        # Sync cancellation token with display_manager
+        if hasattr(self.display, '_news_cancel_token'):
+            self.display._news_cancel_token += 1
+        self.logger.info("stop_news_tts: Cleared news TTS queue, set stop event, incremented cancel token.")
+        # Attempt to clear any pending auto-advance in display_manager
+        if hasattr(self.display, 'clear_pending_auto_advance'):
+            self.display.clear_pending_auto_advance()
     
     def _save_configuration(self, config_values: dict):
         """Save configuration changes to files"""

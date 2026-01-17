@@ -59,8 +59,10 @@ class DisplayManager:
         # Setup UI
         self._setup_ui()
         
-        # Start checking for pending auto-advance and speaking text
+        # Start checking for pending auto-advance, speaking text, and voice recognition queue
         self.root.after(100, self._check_pending_updates)
+        
+        self._news_cancel_token = 0  # Incremented to cancel all pending news actions
         
     def _setup_ui(self):
         """Setup the UI components"""
@@ -1072,17 +1074,8 @@ class DisplayManager:
         desc_label.pack(fill=tk.X)
     
     def _on_tab_changed(self, event):
-        """Handle tab change event"""
-        current_tab = self.notebook.index(self.notebook.select())
-        
-        # If switched to News tab (index 1) and has news items, start auto-read
-        if current_tab == 1:  # News tab
-            if not self.news_items and self.on_fetch_news_callback:
-                # Auto-fetch news when switching to News tab for first time
-                self.on_fetch_news_callback()
-            elif self.news_items and self.auto_read_on_tab_switch and not self.auto_read_active:
-                # Start auto-reading if news already loaded
-                self.start_auto_read()
+        """Handle tab change event (auto news fetch and auto-read disabled)"""
+        # Auto-fetch and auto-read are disabled. No action is taken when switching tabs.
     
     def start_auto_read(self):
         """Start automatically reading news page by page"""
@@ -1098,50 +1091,80 @@ class DisplayManager:
     def stop_auto_read(self):
         """Stop auto-reading"""
         self.auto_read_active = False
+        self._pending_auto_advance = False
+        self._news_cancel_token += 1  # Invalidate all pending callbacks
+        self.logger.info("stop_auto_read: Cleared pending auto-advance, set auto_read_active to False, incremented cancel token")
     
     def _read_current_item_auto(self):
-        """Read current news item with auto-advance"""
-        if not self.auto_read_active or not self.news_items:
-            self.logger.warning(f"Cannot read: active={self.auto_read_active}, items={len(self.news_items) if self.news_items else 0}")
+        # FINAL GUARD: Do not read if auto_read_active is now False
+        if not self.auto_read_active:
+            self.logger.warning("_read_current_item_auto: Auto-read not active, aborting news read.")
             return
-        
+        if not self.news_items:
+            self.logger.warning(f"Cannot read: active={self.auto_read_active}, items=0")
+            return
         # Calculate absolute index
         abs_index = self.current_page * self.items_per_page + self.current_item_in_page
         self.logger.info(f"Reading news at absolute index {abs_index} (page {self.current_page}, item {self.current_item_in_page})")
-        
+        # Capture cancel token at scheduling time
+        cancel_token = self._news_cancel_token
         if abs_index < len(self.news_items):
             item = self.news_items[abs_index]
-            if self.on_read_news_callback:
+            # GUARD: Do not invoke callback if auto_read_active is False or token changed
+            if self.on_read_news_callback and self.auto_read_active and cancel_token == self._news_cancel_token:
                 self.on_read_news_callback(item, auto_advance=True)
+            else:
+                self.logger.info("on_read_news_callback skipped: auto_read_active is False or cancel token changed")
         else:
             self.logger.error(f"Index {abs_index} out of range (total: {len(self.news_items)})")
     
     def schedule_auto_advance(self):
         """Schedule auto advance from background thread (thread-safe)"""
-        # Set a flag that will be checked by the GUI thread
+        if not self.auto_read_active:
+            self.logger.info("Auto-read not active, not scheduling auto-advance")
+            return
+        # Set a flag that will be checked by the GUI thread, and capture cancel token
         self._pending_auto_advance = True
-        self.logger.info("Set pending auto-advance flag")
+        self._pending_auto_advance_token = self._news_cancel_token
+        self.logger.info("Set pending auto-advance flag with token %d", self._pending_auto_advance_token)
+    
+    def clear_pending_auto_advance(self):
+        """Clear any pending auto-advance flag immediately."""
+        self._pending_auto_advance = False
+        self.logger.info("Cleared pending auto-advance flag (stop called)")
     
     def _check_pending_updates(self):
         """Check and process pending updates from background threads (called from GUI thread)"""
         # Check for pending auto-advance
         if hasattr(self, '_pending_auto_advance') and self._pending_auto_advance:
-            self._pending_auto_advance = False
-            self.logger.info("Processing pending auto-advance")
-            self.auto_advance_news()
-        
+            # Only process if token matches
+            if getattr(self, '_pending_auto_advance_token', None) == self._news_cancel_token:
+                self._pending_auto_advance = False
+                self.logger.info("Processing pending auto-advance (token valid)")
+                self.auto_advance_news()
+            else:
+                self._pending_auto_advance = False
+                self.logger.info("Skipped pending auto-advance: cancel token changed")
+
         # Check for pending speaking text updates
         if hasattr(self, '_pending_speaking_text') and self._pending_speaking_text is not None:
             text = self._pending_speaking_text
             self._pending_speaking_text = None
             self.speaking_label.config(text=text)
             self.speaking_frame.pack(fill=tk.X, padx=20, pady=(0, 10), after=self.status_label.master)
-        
+
         # Check for pending hide speaking text
         if hasattr(self, '_pending_hide_speaking') and self._pending_hide_speaking:
             self._pending_hide_speaking = False
             self.speaking_frame.pack_forget()
-        
+
+        # Process any recognized voice text from the audio queue (thread-safe)
+        if hasattr(self, 'voice_recognition') and hasattr(self.voice_recognition, 'process_pending_audio'):
+            # self.logger.info("[INFO] _check_pending_updates: voice_recognition and process_pending_audio present, calling it.")
+            self.voice_recognition.process_pending_audio()
+        else:
+            self.logger.info(f"[INFO] _check_pending_updates: voice_recognition present? {hasattr(self, 'voice_recognition')}, process_pending_audio present? {hasattr(getattr(self, 'voice_recognition', None), 'process_pending_audio')}")
+
         # Check again after 100ms
         self.root.after(100, self._check_pending_updates)
     
@@ -1149,35 +1172,44 @@ class DisplayManager:
         """Advance to next news item within page, or next page after all items read"""
         self.logger.info(f"auto_advance_news called: page={self.current_page}, item={self.current_item_in_page}, active={self.auto_read_active}")
         if not self.auto_read_active:
-            self.logger.warning("Auto-read not active, stopping")
+            self.logger.warning("Auto-read not active, stopping (pre-advance)")
             return
-        
+        # Double-check guard: if auto_read_active was set to False after pending flag, do not advance
+        if not getattr(self, 'auto_read_active', True):
+            self.logger.warning("Auto-read not active (double-check), aborting advance.")
+            return
+
         # Move to next item in current page
         self.current_item_in_page += 1
         self.logger.info(f"Advanced to item {self.current_item_in_page}")
-        
+
         # Calculate how many items on current page
         start_idx = self.current_page * self.items_per_page
         end_idx = min(start_idx + self.items_per_page, len(self.news_items))
         items_on_page = end_idx - start_idx
-        
+
         # Check if we finished all items on current page
         if self.current_item_in_page >= items_on_page:
             # Move to next page
             self.current_item_in_page = 0
             self.current_page += 1
-            
+
             total_pages = (len(self.news_items) + self.items_per_page - 1) // self.items_per_page
-            
+
             # Loop back to first page if at end
             if self.current_page >= total_pages:
                 self.current_page = 0
                 self.update_status("🔄 Looping back to first page", "#4ecca3")
-            
+
             # Update page display
             self._display_current_page()
             self.page_label.config(text=f"Page {self.current_page + 1}/{total_pages}")
-        
+
+        # FINAL GUARD: Do not continue if auto_read_active is now False
+        if not self.auto_read_active:
+            self.logger.warning("Auto-read not active, stopping (post-advance guard)")
+            return
+
         # Continue reading
         self._read_current_item_auto()
     

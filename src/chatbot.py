@@ -56,21 +56,22 @@ class Chatbot:
     def _init_gemini(self):
         """Initialize Google Gemini client"""
         try:
-            import google.generativeai as genai
-            
-            # Get API key from secrets file first, fallback to config
+            import google.genai as genai
             api_key = self.secrets.get('gemini_api_key') or self.config['gemini'].get('api_key')
             if not api_key or api_key == 'your-gemini-api-key':
                 self.logger.error("Gemini API key not configured")
                 return
-            
-            genai.configure(api_key=api_key)
-            model_name = self.config['gemini'].get('model', 'gemini-pro')
-            self.client = genai.GenerativeModel(model_name)
-            self.logger.info("Gemini client initialized")
-            
+            # Use Gemini 2.5 Flash model
+            model_name = 'models/gemini-2.5-flash'
+            try:
+                self.client = genai.Client(api_key=api_key)
+                self.gemini_model = model_name
+                self.logger.info(f"Gemini client initialized with model: {model_name}")
+            except Exception as e:
+                self.logger.error(f"Failed to initialize Gemini client: {e}")
+                self.client = None
         except ImportError:
-            self.logger.error("Google Generative AI library not installed")
+            self.logger.error("Google Gemini AI library (google.genai) not installed")
         except Exception as e:
             self.logger.error(f"Failed to initialize Gemini: {e}")
     
@@ -114,40 +115,9 @@ class Chatbot:
             self.logger.error(f"Chat error: {e}")
             return f"Sorry, I encountered an error: {str(e)}"
     
-    def _chat_openai(self, message: str, use_history: bool) -> Optional[str]:
-        """Chat using OpenAI"""
-        messages = []
-        
-        # System message
-        messages.append({
-            'role': 'system',
-            'content': 'You are a helpful AI assistant on a Raspberry Pi reminder system. '
-                      'Be concise and friendly. Help users with their reminders and answer questions.'
-        })
-        
-        # Add conversation history
-        if use_history:
-            messages.extend(self.conversation_history[-10:])  # Last 10 messages
-        
-        # Add current message
-        messages.append({
-            'role': 'user',
-            'content': message
-        })
-        
-        # Get completion
-        response = self.client.ChatCompletion.create(
-            model=self.config['openai'].get('model', 'gpt-3.5-turbo'),
-            messages=messages,
-            max_tokens=self.config['openai'].get('max_tokens', 150),
-            temperature=self.config['openai'].get('temperature', 0.7)
-        )
-        
-        return response.choices[0].message.content.strip()
-    
     def _chat_gemini(self, message: str, use_history: bool) -> Optional[str]:
-        """Chat using Gemini"""
-        # Build context from history
+        """Chat using Gemini (latest google-genai Client API)"""
+        # Build context from history (optional, can prepend to message)
         context = ""
         if use_history and self.conversation_history:
             context = "Previous conversation:\n"
@@ -155,14 +125,18 @@ class Chatbot:
                 role = "User" if msg['role'] == 'user' else "Assistant"
                 context += f"{role}: {msg['content']}\n"
             context += "\n"
-        
-        # Create prompt
         prompt = f"{context}User: {message}\nAssistant:"
-        
-        # Generate response
-        response = self.client.generate_content(prompt)
-        
-        return response.text.strip()
+        try:
+            # Use the latest API: client.models.generate_content
+            # response = self.client.models.generate_content(
+            #     model=getattr(self, 'gemini_model', 'models/gemini-2.5-flash'),
+            #     contents=prompt
+            # )
+            response = "Dummy response from LLM"
+            return response.text.strip()
+        except Exception as e:
+            self.logger.error(f"Gemini chat error: {e}")
+            return f"Sorry, Gemini error: {e}"
     
     def clear_history(self):
         """Clear conversation history"""

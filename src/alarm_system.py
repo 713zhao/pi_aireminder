@@ -17,6 +17,20 @@ from event_fetcher import Event
 
 
 class AlarmSystem:
+    def stop_speaking(self):
+        """Interrupt any ongoing TTS playback (gTTS/pygame or pyttsx3)"""
+        # Interrupt gTTS/pygame playback
+        try:
+            pygame.mixer.music.stop()
+        except Exception:
+            pass
+        # Interrupt pyttsx3 playback
+        if self.tts_engine:
+            try:
+                self.tts_engine.stop()
+            except Exception:
+                pass
+
     """Manages alarm sounds and text-to-speech notifications"""
     
     def __init__(self, config: dict, display_manager=None):
@@ -351,7 +365,8 @@ class AlarmSystem:
             self.tts_engine.runAndWait()
     
     def speak_async(self, text: str):
-        """Speak text asynchronously without blocking"""
+        """Speak text asynchronously, interrupting any current speech"""
+        self.stop_speaking()  # Interrupt any ongoing TTS
         thread = threading.Thread(
             target=self._speak,
             args=(text,),

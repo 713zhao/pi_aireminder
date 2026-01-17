@@ -22,7 +22,7 @@ display:
   width: 800
   height: 480
   fullscreen: false
-  refresh_interval: 60  # seconds
+  refresh_interval: 3600  # seconds
 
 # Alarm Configuration
 alarm:
@@ -49,8 +49,9 @@ tts:
 speech:
   engine: "vosk"  # "vosk" or "whisper"
   model_path: "models/vosk-model-small-en-us-0.15"
-  sample_rate: 16000
-  device_index: null  # null = default microphone
+  sample_rate: 44100
+  device_index: 1  # 1 = USB PnP Sound Device: Audio (hw:3,0) (Input)
+  output_device_index: 2  # 2 = pulse (Bluetooth speaker via PulseAudio)
   
   # Whisper settings (if using whisper)
   whisper:
@@ -59,13 +60,17 @@ speech:
     use_api: false  # true for API, false for local
   
   # Wake word detection
-  wake_word: "assistant"
+  wake_word:
+    - assistant
+    - hellen
+    - pi
+    - hello
   stop_command: "stop"
   timeout: 5  # seconds to listen after wake word
 
 # Chatbot Configuration
 chatbot:
-  provider: "openai"  # "openai" or "gemini"
+  provider: "gemini"  # "openai" or "gemini"
   
   # OpenAI settings
   openai:
@@ -85,18 +90,23 @@ logging:
   max_bytes: 10485760  # 10MB
   backup_count: 3
 
+
+# System Configuration
+system:
+  default_volume: 100  # Set default system volume (0-100)
+
 # News Feeds Configuration
 news:
   max_items_per_feed: 5  # Maximum number of items to fetch from each feed
   feeds:
-    #"BBC News": "http://feeds.bbci.co.uk/news/rss.xml"
-     "CNN": "http://rss.cnn.com/rss/edition.rss"
-    #"Reuters": "https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best"
-    #"TechCrunch": "https://techcrunch.com/feed/"
-    #"The Guardian": "https://www.theguardian.com/world/rss"
+    "BBC News": "http://feeds.bbci.co.uk/news/rss.xml"
+    "CNN": "http://rss.cnn.com/rss/edition.rss"
+    "Reuters": "https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best"
+    "TechCrunch": "https://techcrunch.com/feed/"
+    "The Guardian": "https://www.theguardian.com/world/rss"
     # Chinese News Sources (uncomment to enable)
     # "China Daily": "http://www.chinadaily.com.cn/rss/world_rss.xml"
     # "Xinhua English": "http://www.news.cn/english/rss/englishrssnew.xml"
     # "CGTN": "https://www.cgtn.com/rss/news.xml"
     # "South China Morning Post": "https://www.scmp.com/rss/91/feed"
-     "中新网即时新闻": "https://www.chinanews.com.cn/rss/scroll-news.xml"
+    "中新网即时新闻": "https://www.chinanews.com.cn/rss/scroll-news.xml"

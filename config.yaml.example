@@ -1,0 +1,3 @@
+# Example: Add this to your config.yaml
+system:
+  default_volume: 100  # Set default system volume (0-100)

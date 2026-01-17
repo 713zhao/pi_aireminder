@@ -306,3 +306,6 @@ For issues or questions:
 ## License
 
 This project is provided as-is for educational and personal use.
+
+
+source venv/bin/activate && xvfb-run -a python3 src/main.py
